@@ -15,28 +15,38 @@
 ;; Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 (defvar *scopid-mem-file* "~/.emacs.d/scopid-mem.dat")
-(defvar *scopid-global-identifiers* (make-hash-table :test #'equal))
-(defvar *scopid-files* (make-hash-table :test #'equal))
+(defvar *scopid-current-file-data* (make-hash-table :test #'equal))
+(defvar *scopid-global-identifiers-data* (make-hash-table :test #'equal))
+(defvar *scopid-files-data* (make-hash-table :test #'equal))
 
 (defstruct scopid-ident-pos
   file
+  package
   row
   col)
 
 (defun scopid-run-shell (command)
   (with-output-to-string (s)
-                         (run-program "/bin/bash" (list "-c" (print command)) :wait t :output s)
+                         (run-program "/bin/bash" (list "-c" command) :wait t :output s)
     s))
 
 (defun scopid-split (string char)
-  (loop for i = 0 then (1+ j)
-       as j = (position char string :start i)
-       collect (subseq string i j)
-       while j))
+  (let ((str))
+   (loop for i = 0 then (1+ j)
+         as j = (position char string :start i)
+         when (search ".lsp" (setq str (subseq string i j)))
+         collect str
+         while j)))
 
 (defun scopid-parse-file (file)
-  
-)
+  (let ((modtime (scopid-run-shell (format nil "date -r ~A" file))))
+    (when (not (equal (gethash file *scopid-files*) modtime))
+      (setf (gethash file *scopid-files*) modtime)
+      ;; (format t ">>> ~A : ~A~%" file modtime)
+      
+      )
+    )
+  )
 
 (defun scopid-get-all-files-in-dir (dir)
 
@@ -44,10 +54,13 @@
 
 (defun scopid-parse-dir (dir)
   (setq dir (scopid-run-shell (format nil "realpath -z ~A" dir)))
-  (let ((files (remove-if-not (lambda (s) (search ".lsp" s))
-                              (scopid-split (scopid-run-shell (format nil "find ~A -wholename '*.lsp'" dir))
-                                            #\Newline))))
-
+  (let ((files (scopid-split (scopid-run-shell (format nil "find ~A -name '*.lsp'" dir)) #\Newline)))
+    (dolist (file files)
+      (let (;(info (scopid-parse-file file))
+            )
+        (format t ">>> ~A~%" file)
+        )
+      )
   )
 )
 
