@@ -40,8 +40,8 @@
 
 (defun scopid-parse-file-for-globals (file)
   (let ((modtime (scopid-run-shell (format nil "date -r ~A" file))))
-    (when (not (equal (gethash file *scopid-files*) modtime))
-      (setf (gethash file *scopid-files*) modtime)
+    (when (not (equal (gethash file *scopid-files-data*) modtime))
+      (setf (gethash file *scopid-files-data*) modtime)
       ;; (format t ">>> ~A : ~A~%" file modtime)
       
       )
@@ -96,7 +96,7 @@
 
 
 ;; ---------------------------------------------------------
-;; LEXER
+;; PARSER
 ;; ---------------------------------------------------------
 ;; find def -> check if def matches
 (defvar ^s^valid-ident-chars nil)
@@ -106,63 +106,139 @@
                                #\o #\p #\a #\s #\d #\f #\g #\h #\j #\k
                                #\l #\z #\x #\c #\v #\b #\n #\m #\: #\1
                                #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9 #\0))
-
 (defvar ^s^whitespace nil)
 (setq ^s^whitespace '(#\Newline #\Linefeed #\Tab #\Space #\ ))
+(defvar ^s^scope-words nil)
+(setq ^s^scope-words'("defun" "defmacro" "defmethod" "defrtf" ;;theese for globals i guess
+                      "lambda" "multiple-value-bind"
+                      "let" "let*" "do" "labels"))
 (defvar ^s^current-scope 0)
+(defvar ^s^c-tkn nil)
 (defvar ^s^scope-stack '())
+(defvar tmp)
 
-(defun ^s^lexer (file)
+(defun ^s^parser (file)
+  ;; TODO: handle packages
+  (setq ^s^current-scope 0)
+  (setq ^s^scope-stack '())
+  (setq tmp nil)
   (with-open-file (input file)
-                  (do ((tkn (^s^get-token input) (^s^get-token input)))
-                      ((not tkn))
-                    (format t "~A " tkn))
+                  
+                  (^s^program input)
                   )
 )
 
+(defmacro ^s^read ()
+  `(print (setq ^s^c-tkn (^s^get-token stream))))
+(defun ^s^program (stream)
+  (^s^expression stream)
+  (print "------------")
+  (when ^s^c-tkn
+    (^s^program stream))
+  )
+
+(defun ^s^expression (stream)
+  (print "^expr")
+  (^s^read)
+  (if (equal "(" ^s^c-tkn)
+      (^s^list stream)
+    (when (and ^s^c-tkn (not (equal ")" ^s^c-tkn)))
+      (^s^ident stream)))
+  (print "<^expr")
+  )
+
+(defun ^s^list (stream)
+  (print "^list")
+  (push ^s^current-scope ^s^scope-stack)
+  (^s^expression stream)
+  (^s^read)
+  (when (and (not (equal ")" ^s^c-tkn)) ^s^c-tkn) ;; Do deeper
+    (^s^list stream))
+  (pop ^s^scope-stack)
+  (print "<^list")
+)
+
+(defun ^s^ident (stream)
+  (print "^ident")
+  (cond
+   ((member ^s^c-tkn ^s^scope-words :test #'equal)
+    (incf ^s^current-scope)
+    (^s^read) ;; Skip name
+    (^s^read) ;; Skip "("
+    (^s^read-ident-list stream))
+   )
+  (print "<^ident")
+  )
+
+(defun ^s^read-ident-list (stream)
+  (print "^read-ident-l")
+  (^s^read)
+  (cond
+   ((equal "(" ^s^c-tkn)
+    (^s^read)
+    (^s^add-ident ^s^c-tkn)
+    (^s^expression stream)
+    (^s^read)) ;; Skip ")"
+   ((or (equal ")" ^s^c-tkn) (not ^s^c-tkn)) t) ;; Skip case
+   (t (^s^add-ident ^s^c-tkn)))
+  (when (and (not (equal ")" ^s^c-tkn)) ^s^c-tkn) ;; Do deeper
+    (^s^read-ident-list stream)))
+
+(defun ^s^add-ident (ident)
+  (push ident tmp)
+  ) 
+
 (defun ^s^get-token (stream)
   (let ((flag nil) (token nil) (screen nil))
-    (do ((c (read-char stream) (read-char stream nil 'the-end)))
-        ((or (not (characterp c)) flag) (unread-char c stream))
+    (do ((c (read-char stream nil 'the-end) (read-char stream nil 'the-end)))
+        ((or (not (characterp c)) flag) (if (characterp c) (unread-char c stream)))
       (cond
            ((and (eq #\\ c) (not screen)) (setf screen t)) ;; backslash
            ((member c ^s^whitespace) ;; whitespace
             (if token
                 (setq flag t)))
-           ;; TODO comment
+           ((eq #\; c) ;; comment
+            (do ((c (read-char stream nil 'the-end) (read-char stream nil 'the-end)))
+                ((or (not (characterp c)) (eq #\Newline c)))))
            ((eq #\# c) ;; reader macro
             (if (or token screen)
                (progn (push c token)
                       (when screen
                         (setf screen nil)))
                (progn
-                 (setq c (read-char stream))
+                 (setq c (read-char stream nil 'the-end))
                  (cond
                   ((eq #\\ c)
-                   (setq c (read-char stream))
+                   (setq c (read-char stream nil 'the-end))
                    (unless (eq #\  c)
-                     (unread-char c stream)  
+                     (if (characterp c) (unread-char c stream))  
                      (^s^get-token stream)))
                   ((eq #\' c)
                    (setf token (reverse (coerce (^s^get-token stream) 'list)))
                    (setf flag t))
-                  ;; TODO comment
+                  ((eq #\| c)
+                   (let ((endc nil))
+                     (do ((c (read-char stream nil 'the-end) (read-char stream nil 'the-end)))
+                         ((or (not (characterp c)) endc) (if (characterp c) (unread-char c stream)))
+                       (when (eq #\| c)
+                         (setq c (read-char stream nil 'the-end))
+                         (if (eq #\# c)
+                           (setq endc t)
+                           (if (characterp c) (unread-char c stream)))))))
                   (t (^s^get-token stream))))))
            ((or (member c ^s^valid-ident-chars) screen) ;; ident
              (push c token)
              (when screen
                (setf screen nil)))
            ((eq #\" c) ;; string
-             (do ((c (read-char stream) (read-char stream nil 'the-end)))
-                 ((and (eq #\" c) (not screen)))
+             (do ((c (read-char stream nil 'the-end) (read-char stream nil 'the-end)))
+                 ((or (not (characterp c)) (and (eq #\" c) (not screen))))
                (if (and (eq #\\ c) (not screen))
                    (setf screen t))
                (if screen
-                   (setf screen nil)))
-             (push #\" token)
-             (setf flag t))
+                   (setf screen nil))))
            (t (setf flag t) ;; single char lexemes
-              (if token
+              (if (and (characterp c) token)
                  (unread-char c stream)
                  (push c token)))))
     (if token
