@@ -108,93 +108,84 @@
                                #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9 #\0))
 (defvar ^s^whitespace nil)
 (setq ^s^whitespace '(#\Newline #\Linefeed #\Tab #\Space #\ ))
+(defvar ^s^named-scope-words nil)
+(setq ^s^named-scope-words'("defun" "defmacro" "defmethod" "defrtf"
+                      ))
 (defvar ^s^scope-words nil)
-(setq ^s^scope-words'("defun" "defmacro" "defmethod" "defrtf" ;;theese for globals i guess
-                      ;"lambda" "multiple-value-bind"
-                      ;"let" "let*" "do" "labels"
+(setq ^s^scope-words'(
+                      "lambda" "multiple-value-bind"
+                      "let" "let*" "do" "labels"
                       ))
 (defvar ^s^current-scope 0)
 (defvar ^s^c-tkn nil)
 (defvar ^s^scope-stack '())
 (defvar ^s^parser-stack nil)
-(defvar tmp)
+(defvar tmp) ; REMOVE
 
-(defun ^s^parser (file)
-  ;; TODO: handle packages
+(defun ^s^local-scope-parser (file)
+  ;; TODO: handle packages?
   (setq ^s^current-scope 0)
   (setq ^s^scope-stack nil)
   (setq ^s^parser-stack nil)
-  (setq tmp nil)
+  (setq tmp nil) ; REMOVE
   (with-open-file (input file)
-                  
-                  (^s^program input)
-                  )
+                  (^s^program input))
 )
 
 (defmacro ^s^read ()
-  `(format t "--- ~A " (setq ^s^c-tkn (or (pop ^s^parser-stack) (^s^get-token stream)))))
+  `(setq ^s^c-tkn (or (pop ^s^parser-stack) (^s^get-token stream))))
 
 (defmacro ^s^unread ()
-  `(format t ">>> ~A" (push ^s^c-tkn ^s^parser-stack)))
+  `(push ^s^c-tkn ^s^parser-stack))
 
 (defun ^s^program (stream)
   (^s^expression stream)
-  (print "------------")
   (when ^s^c-tkn
-    (^s^program stream))
-  )
+    (^s^program stream)))
 
 (defun ^s^expression (stream)
-  (print "expr")
   (^s^read)
-  (when (or (not ^s^c-tkn) ;; TODO: non-identifier things
-            )    
-      (return-from ^s^expression))
-  (if (equal "(" ^s^c-tkn)
-    (^s^list stream)
-    (^s^ident stream)))
+  (if (and ^s^c-tkn (not (equal ")" ^s^c-tkn)))
+    (if (equal "(" ^s^c-tkn)
+        (^s^list stream)
+      (^s^ident stream))
+    (^s^unread)))
 
 (defun ^s^list (stream)
-  (print "list")
   (push ^s^current-scope ^s^scope-stack)
   (do ((flag nil))
-      (flag )
-    (^s^expression stream)
+      (flag)
     (^s^read)
     (if (or (equal ")" ^s^c-tkn) (not ^s^c-tkn))
       (setq flag t)
-      (^s^unread)))      
-  (pop ^s^scope-stack)
-  (print "<list")
-)
+      (progn (^s^unread)
+             (^s^expression stream))))      
+  (pop ^s^scope-stack))
 
 (defun ^s^ident (stream)
-  (print "ident")
   (cond
-   ;; scope-def with name
-   ;; scope-def without name
-   ((member ^s^c-tkn ^s^scope-words :test #'equal)
+   ((member ^s^c-tkn ^s^named-scope-words :test #'equal) ;; scope-def with name
     (incf ^s^current-scope)
     (print ^s^scope-stack)
     (^s^read) ;; Skip name
     (^s^read) ;; Skip "("
-    (^s^parameter-list stream)
-    (^s^read) (^s^unread)
-    )
-   )
-  (print "<ident")
-  )
+    (^s^parameter-list stream))
+   ((member ^s^c-tkn ^s^scope-words :test #'equal) ;; scope-def without name
+    (incf ^s^current-scope)
+    (print ^s^scope-stack)
+    (^s^read) ;; Skip "("
+    (^s^parameter-list stream))
+   (t (print ^s^c-tkn))
+   ))
 
 (defun ^s^parameter-list (stream)
-  (print "parameter-list")
   (do ((flag nil))
       (flag)
-    (^s^parameter stream)
     (^s^read)
     (if (or (equal ")" ^s^c-tkn) (not ^s^c-tkn))
       (setq flag t)
-      (^s^unread)))
-  (print "<parameter-list"))
+      (progn (^s^unread)
+             (^s^parameter stream)))))
 
 (defun ^s^parameter (stream)
   (^s^read)
@@ -203,24 +194,22 @@
     (^s^read)
     (if (or (not ^s^c-tkn) (equal ")" ^s^c-tkn)) ;; ()
         (return-from ^s^parameter))
-    (^s^add-ident ^s^c-tkn)
-    (^s^read)
-    (when (and ^s^c-tkn (not (equal ")" ^s^c-tkn))) ;; (?id expr)
-        (^s^unread)
-        (^s^expression stream)
-        (^s^read) ;; Skip ")"
-        (^s^read) (^s^unread) ;; To continue reading
-        ))
+    (^s^add-def ^s^c-tkn)
+    (do ((flag nil))
+      (flag)
+      (^s^read)
+      (if (or (equal ")" ^s^c-tkn) (not ^s^c-tkn))
+          (setq flag t)
+        (progn (^s^unread)
+               (^s^expression stream)))))
    ((or (not ^s^c-tkn) (equal ")" ^s^c-tkn)) ;; no params
-    (return-from ^s^parameter))
-   (t
-    (^s^add-ident ^s^c-tkn))))
+    (^s^unread))
+   (t (^s^add-def ^s^c-tkn))))
 
-(defun ^s^add-ident (ident)
-  (print "add-ident")
+(defun ^s^add-def (ident)
   (push ident tmp)
+  ;(format t "-~A~%" ^s^scope-stack)
   ) 
-
 
 (defun ^s^get-token (stream)
   (let ((flag nil) (token nil) (screen nil))
