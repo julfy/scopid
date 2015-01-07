@@ -15,15 +15,15 @@
 ;; Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 (defvar *scopid-mem-file* "~/.emacs.d/scopid-mem.dat")
-(defvar *scopid-current-file-data* (make-hash-table :test #'equal))
-(defvar *scopid-global-identifiers-data* (make-hash-table :test #'equal))
+(defvar *scopid-local-def-data* nil)
+(defvar *scopid-current-file-data* nil)
+(defvar *scopid-global-identifiers-data* nil)
 (defvar *scopid-files-data* (make-hash-table :test #'equal))
 
-(defstruct scopid-ident-pos
-  file
-  package
-  row
-  col)
+(defstruct ^s^ident-pos
+  scope
+  start
+  end)
 
 (defun scopid-run-shell (command)
   (with-output-to-string (s)
@@ -120,17 +120,21 @@
 (defvar ^s^c-tkn nil)
 (defvar ^s^scope-stack '())
 (defvar ^s^parser-stack nil)
-(defvar tmp) ; REMOVE
+(defvar ^s^token-pos 0)
+
+(defun ^s^global-scope-parser (file)
+  
+)
 
 (defun ^s^local-scope-parser (file)
   ;; TODO: handle packages?
   (setq ^s^current-scope 0)
   (setq ^s^scope-stack nil)
   (setq ^s^parser-stack nil)
-  (setq tmp nil) ; REMOVE
+  (setq *scopid-current-file-data* nil)
+  (setq *scopid-local-def-data* nil)
   (with-open-file (input file)
-                  (^s^program input))
-)
+                  (^s^program input)))
 
 (defmacro ^s^read ()
   `(setq ^s^c-tkn (or (pop ^s^parser-stack) (^s^get-token stream))))
@@ -175,7 +179,7 @@
     (print ^s^scope-stack)
     (^s^read) ;; Skip "("
     (^s^parameter-list stream))
-   (t (print ^s^c-tkn))
+   (t (^s^add-occurence ^s^c-tkn))
    ))
 
 (defun ^s^parameter-list (stream)
@@ -194,7 +198,7 @@
     (^s^read)
     (if (or (not ^s^c-tkn) (equal ")" ^s^c-tkn)) ;; ()
         (return-from ^s^parameter))
-    (^s^add-def ^s^c-tkn)
+    (^s^add-local-def ^s^c-tkn)
     (do ((flag nil))
       (flag)
       (^s^read)
@@ -204,12 +208,21 @@
                (^s^expression stream)))))
    ((or (not ^s^c-tkn) (equal ")" ^s^c-tkn)) ;; no params
     (^s^unread))
-   (t (^s^add-def ^s^c-tkn))))
+   (t (^s^add-local-def ^s^c-tkn))))
 
-(defun ^s^add-def (ident)
-  (push ident tmp)
-  ;(format t "-~A~%" ^s^scope-stack)
-  ) 
+(defun ^s^add-local-def (ident)
+  (push (cons ident 
+              (make-^s^ident-pos :end ^s^token-pos
+                                 :start (- ^s^token-pos (length ident))
+                                 :scope ^s^scope-stack))
+        *scopid-local-def-data*))
+
+(defun ^s^add-occurence (ident)
+  (push (cons ident
+              (make-^s^ident-pos :end ^s^token-pos
+                                 :start (- ^s^token-pos (length ident))
+                                 :scope ^s^scope-stack))
+        *scopid-current-file-data*))
 
 (defun ^s^get-token (stream)
   (let ((flag nil) (token nil) (screen nil))
@@ -264,7 +277,7 @@
               (if (and (characterp c) token)
                  (unread-char c stream)
                  (push c token)))))
+    (setq ^s^token-pos (1- (file-position stream)))
     (if token
-        (coerce (reverse token) 'string)
-        token)))
-  
+        (string-downcase (coerce (reverse token) 'string))
+      token)))
