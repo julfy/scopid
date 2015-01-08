@@ -16,11 +16,14 @@
 
 (defvar *scopid-mem-file* "~/.emacs.d/scopid-mem.dat")
 (defvar *scopid-local-def-data* nil)
-(defvar *scopid-current-file-data* nil)
-(defvar *scopid-global-identifiers-data* nil)
+(defvar *scopid-buffer-data* nil)
+(defvar *scopid-global-def-data* nil)
 (defvar *scopid-files-data* (make-hash-table :test #'equal))
+;; TODO: add included packages in package
 
 (defstruct ^s^ident-pos
+  file
+  package
   scope
   start
   end)
@@ -98,7 +101,7 @@
 ;; ---------------------------------------------------------
 ;; PARSER
 ;; ---------------------------------------------------------
-;; find def -> check if def matches
+
 (defvar ^s^valid-ident-chars nil)
 (setq ^s^valid-ident-chars '(#\= #\& #\? #\* #\^ #\% #\$ #\# #\@ #\!
                                #\~ #\> #\< #\. #\- #\_ #\+ #\[ #\] #\{
@@ -109,13 +112,18 @@
 (defvar ^s^whitespace nil)
 (setq ^s^whitespace '(#\Newline #\Linefeed #\Tab #\Space #\ ))
 (defvar ^s^named-scope-words nil)
-(setq ^s^named-scope-words'("defun" "defmacro" "defmethod" "defrtf"
-                      ))
+(setq ^s^named-scope-words '("defun" "defmacro" "defmethod" "defrtf"
+                             ))
 (defvar ^s^scope-words nil)
-(setq ^s^scope-words'(
-                      "lambda" "multiple-value-bind"
-                      "let" "let*" "do" "labels"
-                      ))
+(setq ^s^scope-words '("lambda" "multiple-value-bind"
+                       "let" "let*" "do" "labels"
+                       ))
+(defvar ^s^global-def-words '("defun" "defmacro" "defmethod" "defrtf"
+                              "defvar" "defparameter" "defconstant"
+                              "deftype"
+                              ))
+(defvar ^s^current-package nil)
+(defvar ^s^current-file nil)
 (defvar ^s^current-scope 0)
 (defvar ^s^c-tkn nil)
 (defvar ^s^scope-stack '())
@@ -123,15 +131,41 @@
 (defvar ^s^token-pos 0)
 
 (defun ^s^global-scope-parser (file)
-  
-)
+  (setq ^s^current-package nil)
+  (setq ^s^current-file file)
+  (with-open-file (stream file)
+                  (do ((flag nil))
+                      (flag)
+                    (^s^read)
+                    (if (not ^s^c-tkn)
+                        (setq flag t)
+                      (^s^global-definition stream)))))
+
+(defun ^s^global-definition (stream)
+  (cond
+   ;; TODO: handle  structs/classes/defpackage
+   ((equal "in-package" ^s^c-tkn) ;; get package
+    (^s^read)
+    (when (and ^s^c-tkn (not (equal ")" ^s^c-tkn)))
+      (setq ^s^current-package ^s^c-tkn)))
+   ((member ^s^c-tkn ^s^named-scope-words :test #'equal) ;; get ident definition
+    (^s^read)
+    (when (and ^s^c-tkn (not (equal ")" ^s^c-tkn)))
+      (^s^add-global-def ^s^c-tkn)))))
+
+(defun ^s^add-global-def (ident)
+  (push (cons ident 
+              (make-^s^ident-pos :end ^s^token-pos
+                                 :start (- ^s^token-pos (length ident))
+                                 :file ^s^current-file
+                                 :package ^s^current-package))
+        *scopid-global-def-data*))
 
 (defun ^s^local-scope-parser (file)
-  ;; TODO: handle packages?
   (setq ^s^current-scope 0)
   (setq ^s^scope-stack nil)
   (setq ^s^parser-stack nil)
-  (setq *scopid-current-file-data* nil)
+  (setq *scopid-buffer-data* nil)
   (setq *scopid-local-def-data* nil)
   (with-open-file (input file)
                   (^s^program input)))
@@ -168,6 +202,10 @@
 
 (defun ^s^ident (stream)
   (cond
+   ((equal "in-package" ^s^c-tkn) ;; get package
+    (^s^read)
+    (when (and ^s^c-tkn (not (equal ")" ^s^c-tkn)))
+      (setq ^s^current-package ^s^c-tkn)))
    ((member ^s^c-tkn ^s^named-scope-words :test #'equal) ;; scope-def with name
     (incf ^s^current-scope)
     (print ^s^scope-stack)
@@ -179,7 +217,7 @@
     (print ^s^scope-stack)
     (^s^read) ;; Skip "("
     (^s^parameter-list stream))
-   (t (^s^add-occurence ^s^c-tkn))
+   (t (^s^add-occurence ^s^c-tkn)) ;; TODO: handle <package name>:<ident>
    ))
 
 (defun ^s^parameter-list (stream)
@@ -222,7 +260,7 @@
               (make-^s^ident-pos :end ^s^token-pos
                                  :start (- ^s^token-pos (length ident))
                                  :scope ^s^scope-stack))
-        *scopid-current-file-data*))
+        *scopid-buffer-data*))
 
 (defun ^s^get-token (stream)
   (let ((flag nil) (token nil) (screen nil))
