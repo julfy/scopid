@@ -28,12 +28,12 @@
   start
   end)
 
-(defun scopid-run-shell (command)
+(defun scopid-util-run-shell (command)
   (with-output-to-string (s)
                          (run-program "/bin/bash" (list "-c" command) :wait t :output s)
     s))
 
-(defun scopid-split (string char)
+(defun scopid-util-split (string char)
   (let ((str))
    (loop for i = 0 then (1+ j)
          as j = (position char string :start i)
@@ -42,61 +42,71 @@
          while j)))
 
 (defun scopid-parse-file-for-globals (file)
-  (let ((modtime (scopid-run-shell (format nil "date -r ~A" file))))
+  (let ((modtime (scopid-util-run-shell (format nil "date -r ~A" file))))
     (when (not (equal (gethash file *scopid-files-data*) modtime))
       (setf (gethash file *scopid-files-data*) modtime)
-      ;; (format t ">>> ~A : ~A~%" file modtime)
-      
-      )
-    )
-  )
+      (scopid-clean-idents file)
+      (^s^global-scope-parser file))))
 
 (defun scopid-parse-dir (dir)
-  (setq dir (scopid-run-shell (format nil "realpath -z ~A" dir)))
-  (let ((files (scopid-split (scopid-run-shell (format nil "find ~A -name '*.lsp'" dir)) #\Newline)))
+  (setq dir (scopid-util-run-shell (format nil "realpath -z ~A" dir)))
+  (let ((files (scopid-util-split (scopid-util-run-shell (format nil "find ~A -name '*.lsp'" dir)) #\Newline)))
     (dolist (file files)
-      (let (;(info (scopid-parse-file-for-globals file))
-            )
-        (format t ">>> ~A~%" file)
-        )
-      )
-  )
-)
-#|
+      (scopid-parse-file-for-globals file))))
 
-(defun scopid-parse-current-file (file)
-  
-  ) 
+(defun scopid-clean-idents (file)
+  (setq *scopid-global-def-data* (reduce (lambda (lst val) (if (equal file (^s^ident-pos-file (cdr val)))
+                                                               lst
+                                                               (append lst (list val))))
+                                         *scopid-global-def-data*
+                                         :initial-value nil)))
 
-(defun scopid-get-all-files-in-dir (dir)
+(defun scopid-parse-current-buffer ()
+  (with-current-buffer (current-buffer)
+    (^s^local-scope-parser (buffer-file-name (current-buffer)))
+    (scopid-parse-file-for-globals (buffer-file-name (current-buffer))))
+  *scopid-local-def-data*)
 
-)
-
-(defun scopid-highlight-occurences (ident file)
-
-)
-
-(defun scopid-find-occurences (ident file)
-
-)
 
 (defun scopid-find-def (ident file)
-
+  (let ((found nil)
+        (found-relevance 0))
+    )
 )
 
-(defun scopid-compare-scopes (scope1 scope2)
-  ;; each successfull match - +1; scope1 - def; scope2 - ident; scope1 is basic
-)
+(defun scopid-compare-scopes (defn ident)
+  (let ((defn-scope (reverse (^s^ident-pos-scope defn)))
+        (ident-scope (reverse (^s^ident-pos-scope ident)))
+        (num 0))
+    (format t "~A ~A~%" defn-scope ident-scope)
+    (do* ((i 0 (1+ i))
+          (def (car defn-scope) (nth i defn-scope))
+          (id (car ident-scope) (nth i ident-scope)))
+        ((eq def nil))
+      (format t "~A:~A ~A~%" i def id)
+      (if (and def (eq id def))
+          (incf num)
+          (if (or (and def id) (and def (not id)))
+              (return-from scopid-compare-scopes nil))))
+    num))
+#|
+(defun scopid-highlight-occurences ()
+  (scopid-parse-current-buffer)
+  
+  )
+
+(defun scopid-find-occurences (ident file)
+  
+  )
 
 (defun scopid-dump-data ()
-  ;; Possibly redundant
-)
+  
+  )
 
 (defun scopid-load-previous-data ()
-  ;; Possibly redundant
-)
-|#
 
+  )
+|#
 
 ;; ---------------------------------------------------------
 ;; PARSER
@@ -184,7 +194,7 @@
 (defun ^s^expression (stream)
   (^s^read)
   (if (and ^s^c-tkn (not (equal ")" ^s^c-tkn)))
-    (if (equal "(" ^s^c-tkn)
+    (if (equal "(" ^s^c-tkn) 
         (^s^list stream)
       (^s^ident stream))
     (^s^unread)))
