@@ -19,7 +19,7 @@
 (defvar *scopid-buffer-data* nil)
 (defvar *scopid-global-def-data* nil)
 (defvar *scopid-files-data* (make-hash-table :test #'equal))
-(defvar *scopid-highlight-stack* nil)
+(defvar *scopid-defn-stack* nil)
 ;; TODO: add included packages in package
 
 (defstruct ^s^ident-pos
@@ -124,11 +124,10 @@
 (global-set-key (kbd "C-c d") 'scopid-delete-highlighting)
 (defun scopid-delete-highlighting ()
   (interactive)
-  (format "Deleted %s highlights."
-          (length (mapc (lambda (o)
-                          (when (overlay-get o 'scopid)
-                            (delete-overlay o)))
-                        (overlays-in (point-min) (point-max))))))
+  (length (mapc (lambda (o)
+                  (when (overlay-get o 'scopid)
+                    (delete-overlay o)))
+                (overlays-in (point-min) (point-max)))))
 
 (global-set-key (kbd "C-c h") 'scopid-highlight-occurences)
 (defun scopid-highlight-occurences ()
@@ -136,15 +135,35 @@
   (scopid-parse-current-buffer) ;; TODO: highlight definition also
   (let* ((def (scopid-find-def (scopid-get-ident-by-pos (point))))
          (idents (scopid-find-occurences def)))
-    (dolist (id idents)
+    (dolist (id (append idents (list def)))
       (let ((ovr (make-overlay (^s^ident-pos-start (cdr id))
                                (^s^ident-pos-end (cdr id))
                                (current-buffer)
                                nil t)))
         (overlay-put ovr 'face '(:background "#008800"))
         (overlay-put ovr 'scopid t)))
-    (format "Found %s occurences." (length idents)) 
+    (message "Found %s occurences." (length idents)) 
     ))
+
+(global-set-key (kbd "C-c .") 'scopid-go-to-def)
+(defun scopid-go-to-def ()
+  (interactive)
+  (scopid-parse-current-buffer)
+  (let* ((def (scopid-find-def (scopid-get-ident-by-pos (point)))))
+    (if def
+        (message "Definition found.")
+        (message "Definition not found."))
+    (when def
+      (push (point) *scopid-defn-stack*)
+      (goto-char (^s^ident-pos-start (cdr def))))))
+
+(global-set-key (kbd "C-c ,") 'scopid-go-back)
+(defun scopid-go-back ()
+  (interactive)
+  (when *scopid-defn-stack*
+    (goto-char (pop *scopid-defn-stack*)))
+  (unless *scopid-defn-stack*
+    (message "Defn stack is empty.")))
 
 (defun scopid-find-occurences (def)
   (reduce (lambda (lst ident)
@@ -154,14 +173,6 @@
                 lst))
           *scopid-buffer-data*
           :initial-value nil))
-
-(defun scopid-dump-data ()
-  
-  )
-
-(defun scopid-load-previous-data ()
-
-  )
 
 ;; ---------------------------------------------------------
 ;; PARSER
@@ -177,11 +188,11 @@
 (defvar ^s^whitespace nil)
 (setq ^s^whitespace '(?\n ?\t ?\v ?\s ?\r))
 (defvar ^s^named-scope-words nil)
-(setq ^s^named-scope-words '("defun" "defmacro" "defmethod" "defrtf"
+(setq ^s^named-scope-words '("defun" "cl-defun" "defmacro" "defmethod" "defrtf" "defvar" "defparameter"
                              ))
 (defvar ^s^scope-words nil)
 (setq ^s^scope-words '("lambda" "multiple-value-bind"
-                       "let" "let*" "do" "labels"
+                       "let" "let*" "do" "do*" "labels"
                        ))
 (defvar ^s^global-def-words '("defun" "defmacro" "defmethod" "defrtf"
                               "defvar" "defparameter" "defconstant"
@@ -332,72 +343,72 @@
                                  :scope ^s^scope-stack))
         *scopid-buffer-data*))
 
-(defun ^s^read-char (stream &rest r)
-  (declare (ignore r))
-  (incf ^s^stream-pos)
-  (nth (1- ^s^stream-pos) stream))
+(defmacro ^s^read-char ()
+  `(nth (1- (incf ^s^stream-pos)) stream))
 
-(defun ^s^unread-char (c stream)
-  (declare (ignore c stream))
-  (decf ^s^stream-pos))
+(defmacro ^s^unread-char ()
+  `(decf ^s^stream-pos))
+
+(defmacro push-back (what where)
+  `(setq ,where (append ,where (list ,what))))
 
 (defun ^s^get-token (stream)
-  (let ((flag nil) (token nil) (screen nil) (end nil))
-    (do ((c (^s^read-char stream nil 'the-end) (^s^read-char stream nil) 'the-end))
-        ((or (not (characterp c)) flag) (if (characterp c) (^s^unread-char c stream)))
-      (cond
-           ((and (eq ?\\ c) (not screen)) (setq screen t)) ;; backslash
-           ((member c ^s^whitespace) ;; whitespace
-            (when token
-                (setq flag t)
-                (setq end ^s^stream-pos)))
-           ((eq ?\; c) ;; comment
-            (do ((c (^s^read-char stream nil 'the-end) (^s^read-char stream nil 'the-end)))
-                ((or (not (characterp c)) (eq ?\n c)))))
-           ((eq ?\# c) ;; reader macro
-            (if (or token screen)
-               (progn (push c token)
-                      (when screen
-                        (setq screen nil)))
-               (progn
-                 (setq c (^s^read-char stream nil 'the-end))
-                 (cond
-                  ((eq ?\\ c)
-                   (setq c (^s^read-char stream nil 'the-end))
-                   (unless (member c ^s^whitespace)
-                     (if (characterp c) (^s^unread-char c stream))  
-                     (^s^get-token stream)))
-                  ((eq ?' c)
-                   (setq token (reverse (coerce (^s^get-token stream) 'list)))
-                   (setq flag t)
-                   (setq end 0))
-                  ((eq ?\| c)
-                   (let ((endc nil))
-                     (do ((c (^s^read-char stream nil 'the-end) (^s^read-char stream nil 'the-end)))
-                         ((or (not (characterp c)) endc) (if (characterp c) (^s^unread-char c stream)))
-                       (when (eq ?\| c)
-                         (setq c (^s^read-char stream nil 'the-end))
-                         (if (eq ?\# c)
-                           (setq endc t)
-                           (if (characterp c) (^s^unread-char c stream)))))))
-                  (t (^s^get-token stream))))))
-           ((or (member c ^s^valid-ident-chars) screen) ;; ident
-             (push c token)
-             (when screen
-               (setq screen nil)))
-           ((eq ?\" c) ;; string
-             (do ((c (^s^read-char stream nil 'the-end) (^s^read-char stream nil 'the-end)))
-                 ((or (not (characterp c)) (and (eq ?\" c) (not screen))))
-               (if (and (eq ?\\ c) (not screen))
-                   (setq screen t))
-               (if screen
-                   (setq screen nil))))
-           (t (setq flag t) ;; single char lexemes
-              (setq end ^s^stream-pos)
-              (if (and (characterp c) token)
-                 (^s^unread-char c stream)
-                 (push c token)))))
+  (let ((token nil) (screen nil) (end nil))
+    (block token-loop
+     (do ((c (^s^read-char) (^s^read-char) 'the-end))
+         ((not (characterp c)) (^s^unread-char))
+       (cond
+        ((and (eq ?\\ c) (not screen)) (setq screen t)) ;; backslash
+        ((member c ^s^whitespace) ;; whitespace
+         (when token
+           (setq end ^s^stream-pos)
+           (return-from token-loop)))
+        ((eq ?\; c) ;; comment
+         (do ((c (^s^read-char) (^s^read-char)))
+             ((or (not (characterp c)) (eq ?\n c)))))
+        ((eq ?\# c) ;; reader macro
+         (if (or token screen)
+             (progn (push-back c token)
+                    (when screen
+                      (setq screen nil)))
+           (progn
+             (setq c (^s^read-char))
+             (cond
+              ((eq ?\\ c)
+               (setq c (^s^read-char))
+               (unless (member c ^s^whitespace)
+                 (if (characterp c) (^s^unread-char))  
+                 (^s^get-token stream)))
+              ((eq ?' c)
+               (setq token (coerce (^s^get-token stream) 'list))
+               (return-from token-loop))
+              ((eq ?\| c)
+               (block skip-comment-loop
+                 (do ((c (^s^read-char) (^s^read-char)))
+                     ((not (characterp c)) (^s^unread-char))
+                   (when (eq ?\| c)
+                     (setq c (^s^read-char))
+                     (if (eq ?\# c)
+                         (return-from skip-comment-loop)
+                         (if (characterp c) (^s^unread-char)))))))
+              (t (^s^get-token stream))))))
+        ((or (member c ^s^valid-ident-chars) screen) ;; ident
+         (push-back c token)
+         (when screen
+           (setq screen nil)))
+        ((eq ?\" c) ;; string
+         (do ((c (^s^read-char) (^s^read-char)))
+             ((or (not (characterp c)) (and (eq ?\" c) (not screen))))
+           (if (and (eq ?\\ c) (not screen))
+               (setq screen t))
+           (if screen
+               (setq screen nil))))
+        (t (setq end ^s^stream-pos) ;; single char lexemes
+           (if (and (characterp c) token)
+             (^s^unread-char)
+             (push-back c token))
+           (return-from token-loop)))))
     (setq ^s^token-pos (or end 0))
     (if token
-        (downcase (coerce (reverse token) 'string))
-      token)))
+        (downcase (coerce token 'string))
+        nil)))
