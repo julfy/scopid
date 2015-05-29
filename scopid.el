@@ -98,19 +98,16 @@
 
 (defun scopid-compare-scopes (defn ident)
   (catch 'root
-    (if (and defn ident)
-        (let ((defn-scope (reverse (^s^ident-pos-scope defn)))
-              (ident-scope (reverse (^s^ident-pos-scope ident)))
-              (num 0))
-          (do* ((i 0 (1+ i))
-                (def (car defn-scope) (nth i defn-scope))
-                (id (car ident-scope) (nth i ident-scope)))
-              ((eq def nil))
-            (if (and def (eq id def))
-                (incf num)
-              (if (or (and def id) (and def (not id)))
-                  (throw 'root nil))))
-          num))))
+   (if (and defn ident)
+       (let ((defn-scope (reverse (^s^ident-pos-scope defn)))
+             (ident-scope (reverse (^s^ident-pos-scope ident))))
+         (do* ((i 0 (1+ i))
+               (def (car defn-scope) (nth i defn-scope))
+               (id (car ident-scope) (nth i ident-scope)))
+             ((eq def nil))
+           (if (not (eq def id))
+               (throw 'root nil)))
+         (length defn-scope)))))
 
 (defun scopid-get-ident-by-pos (pos)
   (catch 'root
@@ -206,6 +203,7 @@
 (defvar ^s^parser-stack nil)
 (defvar ^s^token-pos 0)
 (defvar ^s^stream-pos 0)
+(defvar ^s^file-size 0)
 
 (defun ^s^global-scope-parser (file)
   (setq ^s^current-package nil)
@@ -250,7 +248,8 @@
   (setq *scopid-local-def-data* nil)
   (with-temp-buffer
     (insert-file-contents file)
-    (^s^program (coerce (buffer-string) 'list))))
+    (setq ^s^file-size (length (buffer-string)))
+    (^s^program (buffer-string))))
 
 (defmacro ^s^read ()
   `(setq ^s^c-tkn (or (pop ^s^parser-stack) (^s^get-token stream))))
@@ -343,8 +342,15 @@
                                  :scope ^s^scope-stack))
         *scopid-buffer-data*))
 
+(defmacro incr (n)
+  `(if (< ,n ^s^file-size)
+       (incf ,n)
+     ,n))
+
 (defmacro ^s^read-char ()
-  `(nth (1- (incf ^s^stream-pos)) stream))
+  `(if (>= ^s^stream-pos ^s^file-size)
+       nil
+     (aref stream (1- (incf ^s^stream-pos)))))
 
 (defmacro ^s^unread-char ()
   `(decf ^s^stream-pos))
