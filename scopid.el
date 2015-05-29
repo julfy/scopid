@@ -211,7 +211,7 @@
   (setq ^s^stream-pos 0)
   (with-temp-buffer
     (insert-file-contents file)
-    (let ((stream (coerce (buffer-string) 'list)))
+    (let ((stream (buffer-string)))
       (do ((flag nil))
                       (flag)
                     (^s^read)
