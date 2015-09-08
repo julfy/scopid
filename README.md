@@ -1,4 +1,4 @@
 scopid
 ======
 
-Emacs extention for highlighting CLisp identifiers and finding their definitions considering visibility scopes.
+Emacs extension for symbol hghlighting and finding their definitions considering visibility scopes.
